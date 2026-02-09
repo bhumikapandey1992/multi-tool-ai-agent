@@ -90,11 +90,24 @@
 │                      BACKEND                                     │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────┐   │
+│  │ Precheck: Non-Tool Task + No File                       │   │
+│  │                                                          │   │
+│  │ If task doesn't match tool names/aliases AND            │   │
+│  │ no file uploaded:                                       │   │
+│  │   → Direct LLM response                                 │   │
+│  │   (No plan/tools executed)                              │   │
+│  └───────────────────┬──────────────────────────────────────┘   │
+│                      │ (otherwise continue)                      │
+│                      ↓                                            │
+│  ┌──────────────────────────────────────────────────────────┐   │
 │  │ LLM Planner (MODERN API - WORKING)                      │   │
 │  │                                                          │   │
 │  │ from openai import OpenAI  ✅ (Modern syntax)           │   │
 │  │ client = OpenAI(api_key=...) ✅ (Modern auth)          │   │
 │  │ client.chat.completions.create() ✅ (v1.0+ API)        │   │
+│  │                                                          │   │
+│  │ .env is loaded at startup (python-dotenv) ✅           │   │
+│  │ OPENAI_API_KEY is available without manual export ✅    │   │
 │  │                                                          │   │
 │  │ System Prompt includes:                                 │   │
 │  │   "Available tools:"                                     │   │
@@ -287,5 +300,4 @@ All variations match! (scores > 0.50 threshold)
 | Scalability | Manual updates needed | Auto-scales |
 | Error Handling | Silent failures | Detailed logging |
 | User Experience | ❌ Breaks on variation | ✅ Works with any wording |
-
 
