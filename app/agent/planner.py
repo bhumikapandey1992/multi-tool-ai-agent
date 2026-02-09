@@ -1,7 +1,6 @@
-def create_plan(task: str, has_file: bool = False) -> list[str]:
+def create_plan_rulebased(task: str, has_file: bool = False) -> list[str]:
     """
-    Convert a user task into high-level execution steps.
-    Simple rule-based planner (no AI yet).
+    Convert a user task into high-level execution steps (rule-based fallback).
 
     `has_file` allows the caller to inform the planner whether a CSV was uploaded.
     """
@@ -9,7 +8,15 @@ def create_plan(task: str, has_file: bool = False) -> list[str]:
     task_lower = task.lower()
     steps: list[str] = []
 
-    wants_summary = "summarize" in task_lower or "summary" in task_lower
+    wants_summary = (
+        "summarize" in task_lower
+        or "summary" in task_lower
+        or "stats" in task_lower
+        or "statistics" in task_lower
+        or "describe" in task_lower
+        or "profile" in task_lower
+        or "overview" in task_lower
+    )
     wants_cleaning = "clean" in task_lower
     mentions_csv = "csv" in task_lower
 

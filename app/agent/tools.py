@@ -70,3 +70,27 @@ TOOL_REGISTRY = {
     "Generate summary statistics": generate_summary_statistics,
     "Detect missing values": detect_missing_values,
 }
+
+# Simple alias keywords to improve intent matching.
+# Keep these lowercase and short for robust substring checks.
+TOOL_ALIASES = {
+    "Generate summary statistics": [
+        "summary",
+        "summarize",
+        "stats",
+        "statistics",
+        "describe",
+        "data stats",
+        "profiling",
+        "overview",
+        "basic stats",
+    ],
+    "Detect missing values": [
+        "missing",
+        "missing values",
+        "null",
+        "nan",
+        "empty",
+        "blank",
+    ],
+}

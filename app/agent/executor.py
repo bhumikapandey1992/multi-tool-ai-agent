@@ -1,6 +1,64 @@
 from typing import List, Optional, Tuple
 from fastapi import UploadFile
-from app.agent.tools import TOOL_REGISTRY
+from app.agent.tools import TOOL_REGISTRY, TOOL_ALIASES
+from difflib import SequenceMatcher
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _find_best_matching_tool(step: str, registry: dict) -> Optional[str]:
+    """
+    Find the best matching tool from the registry for a given plan step.
+    Uses fuzzy string matching to handle variations in wording.
+
+    Args:
+        step: The plan step (e.g., "Generate summary stats", "Check for missing data")
+        registry: The tool registry dictionary
+
+    Returns:
+        The best matching tool name from registry, or None if no good match found
+    """
+    if not registry:
+        return None
+
+    step_lower = step.lower()
+
+    # 1) Exact or alias keyword match
+    best_alias_match = None
+    best_alias_len = 0
+    for tool_name in registry.keys():
+        if step_lower == tool_name.lower():
+            return tool_name
+        for alias in TOOL_ALIASES.get(tool_name, []):
+            if alias in step_lower and len(alias) > best_alias_len:
+                best_alias_match = tool_name
+                best_alias_len = len(alias)
+
+    if best_alias_match:
+        logger.info(f"Matched step '{step}' to tool '{best_alias_match}' via alias")
+        return best_alias_match
+    best_match = None
+    best_score = 0.0
+    threshold = 0.5  # Minimum similarity score (0-1)
+
+    for tool_name in registry.keys():
+        tool_name_lower = tool_name.lower()
+        # Calculate similarity ratio between step and tool name
+        similarity = SequenceMatcher(None, step_lower, tool_name_lower).ratio()
+
+        logger.debug(f"Comparing '{step}' to '{tool_name}': similarity={similarity:.2f}")
+
+        if similarity > best_score and similarity >= threshold:
+            best_score = similarity
+            best_match = tool_name
+
+    if best_match:
+        logger.info(f"Matched step '{step}' to tool '{best_match}' (score: {best_score:.2f})")
+    else:
+        logger.warning(f"Could not find matching tool for step: '{step}'")
+
+    return best_match
 
 
 def execute_plan(
@@ -9,6 +67,9 @@ def execute_plan(
 ) -> Tuple[str, list]:
     """
     Execute a planned sequence of steps using registered tools.
+
+    Uses intelligent matching to map plan steps to available tools,
+    rather than hardcoded keyword matching.
 
     Returns:
         result (str): final output produced by the agent
@@ -19,113 +80,74 @@ def execute_plan(
     result: str = ""
 
     for step in plan:
-        step_lower = step.lower()
+        # Find the best matching tool for this step
+        matched_tool_name = _find_best_matching_tool(step, TOOL_REGISTRY)
 
-        # ============================================================
-        # Generate Summary Statistics
-        # ============================================================
-        if "summary statistics" in step_lower:
-            tool_name = "Generate summary statistics"
-            tool = TOOL_REGISTRY.get(tool_name)
+        if matched_tool_name is None:
+            # No suitable tool found for this step
+            logger.warning(f"No matching tool found for plan step: {step}")
+            tool_calls.append({
+                "tool_name": step,
+                "arguments": {},
+                "status": "skipped",
+                "reason": "no_matching_tool",
+                "error": f"Could not map '{step}' to any available tool"
+            })
+            continue
 
-            # Tool missing from registry
-            if tool is None:
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "error",
-                    "error": "tool_not_found"
-                })
-                result = "Requested tool not available"
-                continue
+        tool = TOOL_REGISTRY.get(matched_tool_name)
 
-            # File required but not provided
-            if file is None:
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "skipped",
-                    "reason": "no_file_provided"
-                })
-                result = "No file provided for generating summary statistics"
-                continue
+        # Tool should exist since we got it from the registry
+        if tool is None:
+            tool_calls.append({
+                "tool_name": matched_tool_name,
+                "arguments": {},
+                "status": "error",
+                "error": "tool_not_found"
+            })
+            result = f"Requested tool '{matched_tool_name}' not available"
+            continue
 
-            # Ensure the file pointer is at the start for this tool
-            try:
-                if hasattr(file, "file") and hasattr(file.file, "seek"):
-                    file.file.seek(0)
-            except Exception:
-                # non-fatal: if we can't rewind, proceed and let the tool handle errors
-                pass
+        # Check if file is required
+        # File-requiring tools should work with UploadFile
+        if file is None:
+            tool_calls.append({
+                "tool_name": matched_tool_name,
+                "arguments": {},
+                "status": "skipped",
+                "reason": "no_file_provided",
+                "error": f"Tool '{matched_tool_name}' requires a file, but none was provided"
+            })
+            result = f"No file provided for {matched_tool_name}"
+            continue
 
-            # Execute tool safely
-            try:
-                output = tool(file)
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "success"
-                })
-                result = output
-            except Exception as e:
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "error",
-                    "error": str(e)
-                })
-                result = f"Error running tool: {e}"
+        # Ensure the file pointer is at the start for this tool
+        try:
+            if hasattr(file, "file") and hasattr(file.file, "seek"):
+                file.file.seek(0)
+        except Exception as e:
+            logger.warning(f"Could not seek file: {e}")
 
-        # ============================================================
-        # Detect Missing Values
-        # ============================================================
-        elif "missing values" in step_lower or "missing" in step_lower:
-            tool_name = "Detect missing values"
-            tool = TOOL_REGISTRY.get(tool_name)
-
-            if tool is None:
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "error",
-                    "error": "tool_not_found"
-                })
-                result = "Missing-values tool not available"
-                continue
-
-            if file is None:
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "skipped",
-                    "reason": "no_file_provided"
-                })
-                result = "No file provided to detect missing values"
-                continue
-
-            # Rewind file pointer before calling tool
-            try:
-                if hasattr(file, "file") and hasattr(file.file, "seek"):
-                    file.file.seek(0)
-            except Exception:
-                pass
-
-            try:
-                output = tool(file)
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "success"
-                })
-                result = output
-            except Exception as e:
-                tool_calls.append({
-                    "tool_name": tool_name,
-                    "arguments": {},
-                    "status": "error",
-                    "error": str(e)
-                })
-                result = f"Error detecting missing values: {e}"
+        # Execute tool safely
+        try:
+            logger.info(f"Executing tool: {matched_tool_name}")
+            output = tool(file)
+            tool_calls.append({
+                "tool_name": matched_tool_name,
+                "arguments": {},
+                "status": "success"
+            })
+            result = output
+            logger.info(f"Tool {matched_tool_name} executed successfully")
+        except Exception as e:
+            logger.error(f"Error executing tool {matched_tool_name}: {e}")
+            tool_calls.append({
+                "tool_name": matched_tool_name,
+                "arguments": {},
+                "status": "error",
+                "error": str(e)
+            })
+            result = f"Error running tool '{matched_tool_name}': {e}"
 
     # End of plan loop — return collected results
     return result, tool_calls
